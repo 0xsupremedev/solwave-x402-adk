@@ -192,41 +192,41 @@ flowchart LR
 ┌─────────┐         ┌──────────┐         ┌─────────────┐         ┌──────────┐
 │ Client  │         │ Provider │         │ Facilitator │         │ Solana   │
 └────┬────┘         └────┬─────┘         └──────┬──────┘         └────┬─────┘
-     │                   │                       │                      │
-     │ 1. GET /api/data  │                       │                      │
-     ├──────────────────►│                       │                      │
-     │                   │                       │                      │
-     │ 2. 402 Payment    │                       │                      │
-     │    Required       │                       │                      │
-     │    + Requirements │                       │                      │
-     │◄──────────────────┤                       │                      │
-     │                   │                       │                      │
-     │ 3. Create Payment │                       │                      │
-     │    Authorization  │                       │                      │
-     │    (with nonce)   │                       │                      │
-     │                   │                       │                      │
-     │ 4. POST /api/data │                       │                      │
-     │    + X-PAYMENT    │                       │                      │
-     │    header         │                       │                      │
-     ├──────────────────►│                       │                      │
-     │                   │                       │                      │
-     │                   │ 5. POST /verify      │                      │
-     │                   ├──────────────────────►│                      │
-     │                   │                       │                      │
-     │                   │ 6. Verify Response   │                      │
-     │                   │    {isValid: true}   │                      │
-     │                   │◄──────────────────────┤                      │
-     │                   │                       │                      │
+     │                   │                      │                     │
+     │ 1. GET /api/data  │                      │                     │
+     ├──────────────────►│                      │                     │
+     │                   │                      │                     │
+     │ 2. 402 Payment    │                      │                     │
+     │    Required       │                      │                     │
+     │    + Requirements │                      │                     │
+     │◄──────────────────┤                      │                     │
+     │                   │                      │                     │
+     │ 3. Create Payment │                      │                     │
+     │    Authorization  │                      │                     │
+     │    (with nonce)   │                      │                     │
+     │                   │                      │                     │
+     │ 4. POST /api/data │                      │                     │
+     │    + X-PAYMENT    │                      │                     │
+     │    header         │                      │                     │
+     ├──────────────────►│                      │                     │
+     │                   │                      │                     │
+     │                   │ 5. POST /verify      │                     │
+     │                   ├──────────────────────►│                    │
+     │                   │                       │                    │
+     │                   │ 6. Verify Response   │                     │
+     │                   │    {isValid: true}   │                     │
+     │                   │◄──────────────────────┤                    │
+     │                   │                       │                    │
      │                   │ 7. POST /settle     │                      │
-     │                   ├──────────────────────►│                      │
-     │                   │                       │                      │
+     │                   ├──────────────────────►│                    │
+     │                   │                       │                    │
      │                   │                       │ 8. Create Transaction│
      │                   │                       ├─────────────────────►│
      │                   │                       │                      │
      │                   │                       │ 9. Transaction Hash  │
      │                   │                       │◄─────────────────────┤
      │                   │                       │                      │
-     │                   │ 10. Settlement Resp  │                      │
+     │                   │ 10. Settlement Resp  │                       │
      │                   │     {success: true,   │                      │
      │                   │      txHash: "..."}   │                      │
      │                   │◄──────────────────────┤                      │
@@ -244,33 +244,33 @@ flowchart LR
 ┌─────────────────────────────────────────────────────────────┐
 │                     Web UI (Next.js)                        │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   Wallet     │  │   Payment    │  │  Resource   │      │
-│  │   Provider   │  │   Modal      │  │   Card      │      │
-│  │              │  │              │  │              │      │
-│  │  • Connect   │  │  • Show     │  │  • Display   │      │
-│  │  • Sign      │  │    Amount    │  │    Info     │      │
-│  │  • State     │  │  • Execute   │  │  • Trigger  │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│                                                              │
+│                                                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
+│  │   Wallet     │  │   Payment    │  │  Resource    │       │
+│  │   Provider   │  │   Modal      │  │   Card       │       │
+│  │              │  │              │  │              │       │
+│  │  • Connect   │  │  • Show     │  │  • Display    │       │
+│  │  • Sign      │  │    Amount    │  │    Info      │       │
+│  │  • State     │  │  • Execute   │  │  • Trigger   │       │
+│  └──────────────┘  └──────────────┘  └──────────────┘       │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
                             │
                             │ HTTP
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                  Provider API Service                        │
+│                  Provider API Service                       │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌────────────────────────────────────────────────────┐   │
-│  │              x402 Guard Middleware                  │   │
-│  │                                                      │   │
-│  │  1. Check X-PAYMENT header                          │   │
-│  │  2. If missing → Return 402                         │   │
-│  │  3. If present → Verify with Facilitator            │   │
-│  │  4. If valid → Settle with Facilitator              │   │
-│  │  5. If settled → Allow request to proceed           │   │
-│  └────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │              x402 Guard Middleware                 │     │
+│  │                                                    │     │
+│  │  1. Check X-PAYMENT header                         │     │
+│  │  2. If missing → Return 402                        │     │
+│  │  3. If present → Verify with Facilitator           │     │
+│  │  4. If valid → Settle with Facilitator             │     │
+│  │  5. If settled → Allow request to proceed          │     │
+│  └────────────────────────────────────────────────────┘     │
 │                            │                                │
 │                            │ POST /verify, /settle          │
 │                            ▼                                │
@@ -281,26 +281,26 @@ flowchart LR
 ┌─────────────────────────────────────────────────────────────┐
 │                  Facilitator Service                        │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌────────────────────────────────────────────────────┐   │
-│  │              Verification Engine                    │   │
-│  │                                                      │   │
-│  │  • Parse payment header                             │   │
-│  │  • Validate signature                               │   │
-│  │  • Check nonce (replay protection)                 │   │
-│  │  • Validate time window                             │   │
-│  │  • Verify amount & recipient                        │   │
-│  └────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │              Verification Engine                   │     │
+│  │                                                    │     │
+│  │  • Parse payment header                            │     │
+│  │  • Validate signature                              │     │
+│  │  • Check nonce (replay protection)                 │     │
+│  │  • Validate time window                            │     │
+│  │  • Verify amount & recipient                       │     │
+│  └────────────────────────────────────────────────────┘     │
 │                            │                                │
-│  ┌────────────────────────────────────────────────────┐   │
-│  │              Settlement Engine                       │   │
-│  │                                                      │   │
-│  │  • Create Solana transaction                        │   │
-│  │  • Sign with fee payer                              │   │
-│  │  • Submit to blockchain                             │   │
-│  │  • Wait for confirmation                            │   │
-│  │  • Return transaction hash                          │   │
-│  └────────────────────────────────────────────────────┘   │
+│  ┌────────────────────────────────────────────────────┐     │
+│  │              Settlement Engine                     │     │
+│  │                                                    │     │
+│  │  • Create Solana transaction                       │     │
+│  │  • Sign with fee payer                             │     │
+│  │  • Submit to blockchain                            │     │
+│  │  • Wait for confirmation                           │     │
+│  │  • Return transaction hash                         │     │
+│  └────────────────────────────────────────────────────┘     │
 │                            │                                │
 │                            │ RPC                            │
 │                            ▼                                │
