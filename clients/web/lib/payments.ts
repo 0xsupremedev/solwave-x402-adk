@@ -1,5 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
-import type { PaymentRequirements } from '../../../shared/types/x402';
+import type { PaymentRequirements } from '../types/x402';
 
 function randomHex(bytes: number): string {
   if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
