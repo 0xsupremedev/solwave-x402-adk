@@ -1,9 +1,4 @@
 # 🚀 MicroAPI Hub
-<img width="1557" height="1079" alt="image" src="https://github.com/user-attachments/assets/f092b525-0732-4fcc-afd8-b739a26c4d6c" />
-<img width="1592" height="1077" alt="image" src="https://github.com/user-attachments/assets/82ac7572-d48a-4b01-9015-8cfd696f2986" />
-
-
-<div align="center">
 
 **Complete x402 (Solana) payment protocol implementation for API monetization**
 
@@ -12,6 +7,12 @@
 [![Solana](https://img.shields.io/badge/Solana-Devnet-9945FF)](https://solana.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green)](https://nodejs.org/)
+
+<img width="1557" height="1079" alt="image" src="https://github.com/user-attachments/assets/f092b525-0732-4fcc-afd8-b739a26c4d6c" />
+<img width="1592" height="1077" alt="image" src="https://github.com/user-attachments/assets/82ac7572-d48a-4b01-9015-8cfd696f2986" />
+
+
+<div align="center">
 
 **Built for the Solana X402 Hackathon** 🏆
 
