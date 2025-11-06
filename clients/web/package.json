@@ -9,7 +9,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@rainbow-me/rainbowkit": "1.0.2",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-react": "^0.15.39",
     "@solana/wallet-adapter-react-ui": "^0.9.39",
@@ -18,9 +17,7 @@
     "next": "14.2.11",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "react-hot-toast": "^2.6.0",
-    "viem": "^1.15.0",
-    "wagmi": "1.4.0"
+    "react-hot-toast": "^2.6.0"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.19",
