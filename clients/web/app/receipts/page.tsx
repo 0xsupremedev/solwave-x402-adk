@@ -67,6 +67,18 @@ export default function Receipts() {
       }
 
       // Parse transaction for receipt info
+      // Safely derive payer from versioned message account keys
+      const payerDerived = (() => {
+        try {
+          const msg: any = tx.transaction.message as any;
+          const keys = typeof msg.getAccountKeys === 'function' ? msg.getAccountKeys() : undefined;
+          const firstKey = keys?.staticAccountKeys?.[0] || keys?.accountKeys?.[0];
+          return typeof firstKey?.toBase58 === 'function' ? firstKey.toBase58() : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+
       const receipt: Receipt = {
         signature: searchHash,
         timestamp: (tx.blockTime || Date.now() / 1000) * 1000,
@@ -75,7 +87,7 @@ export default function Receipts() {
         asset: 'SOL',
         network: 'solana-devnet',
         status: signature.value.err ? 'failed' : 'confirmed',
-        payer: tx.transaction.message.accountKeys[0]?.pubkey.toBase58(),
+        payer: payerDerived,
       };
 
       setReceipts([receipt, ...receipts]);
