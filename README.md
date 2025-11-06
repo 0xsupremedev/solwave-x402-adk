@@ -196,6 +196,70 @@ x402 is an open payment standard that enables clients to pay for external resour
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+### UML Sequence Diagram (Swimlanes)
+
+The following Mermaid diagram shows the end-to-end x402 payment flow across swimlanes for Client, Provider, Facilitator, and Solana:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  box Client
+    participant C as Client (Web UI / Agent)
+  end
+  box Provider API
+    participant P as Provider API (x402 Guard)
+  end
+  box Facilitator
+    participant F as Facilitator (Verify & Settle)
+  end
+  box Solana
+    participant S as Solana Network
+  end
+
+  C->>P: 1) GET /api/data (no X-PAYMENT)
+  P-->>C: 2) 402 Payment Required + PaymentRequirements
+
+  note over C: Create x402 Payment Header<br/>- Secure nonce<br/>- Time window<br/>- Authorization payload
+
+  C->>P: 3) GET /api/data with X-PAYMENT
+  P->>F: 4) POST /verify { paymentHeader, requirements }
+  F-->>P: 5) { isValid: true }
+
+  P->>F: 6) POST /settle { paymentHeader, requirements }
+  F->>S: 7) Submit transaction (native/SPL)
+  S-->>F: 8) Confirmed (tx hash)
+  F-->>P: 9) { success: true, txHash }
+  P-->>C: 10) 200 OK + X-PAYMENT-RESPONSE (txHash)
+```
+
+Alternatively, here is a swimlane-style activity view using Mermaid flowchart subgraphs (lanes):
+
+```mermaid
+flowchart LR
+  subgraph L1[Client]
+    A[Request /api/data] --> B[Receive 402 + Requirements]
+    B --> C[Create X-PAYMENT header]
+    C --> D[Call /api/data with header]
+  end
+
+  subgraph L2[Provider]
+    D --> E[Verify with Facilitator]
+    E --> G[Settle with Facilitator]
+    G --> H[Return 200 + X-PAYMENT-RESPONSE]
+  end
+
+  subgraph L3[Facilitator]
+    E --> F[Verify Authorization]
+    G --> I[Build & Submit Transaction]
+  end
+
+  subgraph L4[Solana]
+    I --> J[Confirm Transaction]
+  end
+
+  J --> H
+```
+
 ### Payment Flow Sequence
 
 ```
