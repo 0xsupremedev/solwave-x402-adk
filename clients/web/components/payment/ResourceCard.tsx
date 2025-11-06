@@ -51,7 +51,7 @@ export function ResourceCard({ route, requirements, baseUrl = 'http://localhost:
             <span className="text-neutral-500">Network:</span> {requirements.network.replace('solana-', '')}
           </div>
           <div>
-            <span className="text-neutral-500">Asset:</span> {requirements.extra?.name || 'Native'}
+            <span className="text-neutral-500">Asset:</span> {String((requirements.extra as any)?.name || 'Native')}
           </div>
         </div>
 
