@@ -6,11 +6,42 @@ import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import fetch from 'node-fetch';
 import { loadConfig } from './config';
+import { initProviderKeypair, createSignedResponseHeader, getProviderPublicKey } from './signing';
 
 const log = pino();
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// Security: CORS configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['*'];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (allowedOrigins.includes('*') || !origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-PAYMENT'],
+}));
+
+// Security: Body parsing
+app.use(express.json({ limit: '1mb' }));
+
+// Security: Security headers middleware
+app.use((req, res, next) => {
+  // Only add security headers for HTTPS requests
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
 
 // Load and validate configuration
 let config;
@@ -21,7 +52,13 @@ try {
   process.exit(1);
 }
 
-const { PORT, PAY_TO_PUBKEY, USDC_MINT, FACILITATOR_URL } = config;
+const { PORT, PAY_TO_PUBKEY, USDC_MINT, FACILITATOR_URL, PROVIDER_SECRET_KEY, ENABLE_RESPONSE_SIGNING } = config;
+
+// Initialize provider keypair for response signing
+if (ENABLE_RESPONSE_SIGNING) {
+  initProviderKeypair(PROVIDER_SECRET_KEY);
+  log.info({ publicKey: getProviderPublicKey().toBase58() }, 'Provider keypair initialized for response signing');
+}
 
 // Simple route map config (amounts in atomic token units)
 type GuardConfig = {
@@ -116,6 +153,18 @@ async function x402Guard(req: express.Request, res: express.Response, next: expr
       return res.status(402).json({ error: 'payment_settlement_failed', details: settlement.error ?? 'unknown' });
     }
     res.setHeader('x-payment-response', Buffer.from(JSON.stringify(settlement)).toString('base64'));
+    
+    // Add response signing middleware
+    if (ENABLE_RESPONSE_SIGNING) {
+      const originalJson = res.json.bind(res);
+      res.json = function(body: any) {
+        const responseBody = JSON.stringify(body);
+        const signedHeader = createSignedResponseHeader(responseBody);
+        res.setHeader('x-payment-response-signature', Buffer.from(signedHeader).toString('base64'));
+        return originalJson(body);
+      };
+    }
+    
     return next();
   } catch (e) {
     const errorMessage = e instanceof Error ? e.message : 'unknown_error';

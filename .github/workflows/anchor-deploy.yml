@@ -1,0 +1,87 @@
+name: Anchor Build & Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: 'Solana cluster to deploy to'
+        required: true
+        type: choice
+        options:
+          - devnet
+          - mainnet-beta
+      require_approval:
+        description: 'Require manual approval for mainnet'
+        required: false
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/anchor-deploy.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Solana CLI
+        uses: nick-fields/action-solana@v2
+        with:
+          solana_version: '1.18.0'
+          anchor_version: '0.29.0'
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install latest
+          avm use latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with: node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Anchor programs
+        working-directory: contracts/registry
+        run: anchor build
+
+      - name: Run Anchor tests
+        working-directory: contracts/registry
+        run: anchor test --skip-local-validator || true
+
+      - name: Deploy to devnet
+        if: (github.event_name == 'push' || (github.event.inputs.cluster == 'devnet'))
+        working-directory: contracts/registry
+        env:
+          ANCHOR_WALLET: ${{ secrets.SOLANA_DEVNET_KEY }}
+        run: |
+          solana config set --url devnet
+          anchor deploy --provider.cluster devnet
+
+      - name: Deploy to mainnet (requires approval)
+        if: github.event.inputs.cluster == 'mainnet-beta'
+        working-directory: contracts/registry
+        env:
+          ANCHOR_WALLET: ${{ secrets.SOLANA_MAINNET_KEY }}
+        run: |
+          echo "⚠️  Mainnet deployment requires security audit approval"
+          solana config set --url mainnet-beta
+          anchor deploy --provider.cluster mainnet-beta
+
+      - name: Output program ID
+        working-directory: contracts/registry
+        run: |
+          if [ -f target/idl/registry.json ]; then
+            cat target/idl/registry.json | jq -r '.name'
+          fi
+

@@ -9,11 +9,53 @@ import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, get
 import crypto from 'node:crypto';
 import { TTLStore } from './store';
 import { loadConfig } from './config';
+import { checkNonceOnChain, registerNonceOnChain } from './nonce-registry';
+import { createKeyManager, KeyRotationScheduler } from './key-management';
+import { RateLimitMiddleware } from './rate-limit';
+import { OraclePriceValidator } from './oracle';
+import { OptimisticVerifier } from './optimistic-verify';
+import { BatchSettlementManager, QueuedPayment } from './batch-settlement';
+import { FeePayerPool } from './fee-payer-pool';
+import { FailoverCoordinator, MerkleReceiptSync } from './failover';
+import { NFTMintingService } from './nft-minting';
+import { AnalyticsAggregator } from './analytics';
+import { ReputationManager } from './reputation';
+import { BridgeManager } from './bridge';
 
 const log = pino();
 const app = express();
-app.use(cors());
+
+// Security: CORS configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['*'];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (allowedOrigins.includes('*') || !origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-PAYMENT'],
+}));
+
+// Security: Body parsing with size limit
 app.use(express.json({ limit: '1mb' }));
+
+// Security: Security headers middleware
+app.use((req, res, next) => {
+  // Only add security headers for HTTPS requests
+  if (req.secure || req.headers['x-forwarded-proto'] === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
 
 // Load and validate configuration
 let config;
@@ -24,10 +66,78 @@ try {
   process.exit(1);
 }
 
-const { PORT, NETWORK, RPC_URL, FEE_PAYER_SECRET, AUTH_TOKEN, SETTLEMENT_MODE, USE_X402_HELPERS, DISABLE_RATE_LIMIT, RATE_LIMIT_MIN_INTERVAL_MS, DISABLE_NONCE_REPLAY, DEMO_MODE, REDIS_URL } = config;
+const { PORT, NETWORK, RPC_URL, FEE_PAYER_SECRET, AUTH_TOKEN, SETTLEMENT_MODE, USE_X402_HELPERS, DISABLE_RATE_LIMIT, RATE_LIMIT_MIN_INTERVAL_MS, DISABLE_NONCE_REPLAY, DEMO_MODE, REDIS_URL, KEY_MANAGEMENT_TYPE, KEY_ROTATION_INTERVAL_MS, HSM_PROVIDER, HSM_PUBLIC_KEY, HSM_ENDPOINT, HSM_API_KEY, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_REQUESTS, ENABLE_REPUTATION, ENABLE_POW, POW_DIFFICULTY, ORACLE_PROVIDER, ORACLE_PRICE_FEED_ID, ORACLE_MAX_DEVIATION_PERCENT } = config;
 
 const connection = new Connection(RPC_URL, 'confirmed');
-const feePayer = FEE_PAYER_SECRET ? Keypair.fromSecretKey(bs58.decode(FEE_PAYER_SECRET)) : Keypair.generate();
+
+// Initialize key manager
+const keyManager = createKeyManager({
+  type: KEY_MANAGEMENT_TYPE,
+  secretKey: FEE_PAYER_SECRET,
+  publicKey: HSM_PUBLIC_KEY,
+  hsmProvider: HSM_PROVIDER,
+  hsmEndpoint: HSM_ENDPOINT,
+  hsmApiKey: HSM_API_KEY,
+});
+
+// Start key rotation scheduler
+const keyRotationScheduler = new KeyRotationScheduler(
+  keyManager,
+  KEY_ROTATION_INTERVAL_MS,
+  async (newKeyManager) => {
+    log.info({ newPublicKey: newKeyManager.getPublicKey().toBase58() }, 'Key rotated - update facilitator configuration');
+    // In production, you'd update the facilitator's key reference here
+  }
+);
+keyRotationScheduler.start();
+
+// Legacy feePayer for backward compatibility (will be replaced by keyManager)
+const feePayer = KEY_MANAGEMENT_TYPE === 'local' && FEE_PAYER_SECRET
+  ? Keypair.fromSecretKey(bs58.decode(FEE_PAYER_SECRET))
+  : Keypair.generate();
+
+// Fee payer pool (if enabled)
+const ENABLE_FEE_PAYER_POOL = process.env.ENABLE_FEE_PAYER_POOL === 'true' || process.env.ENABLE_FEE_PAYER_POOL === '1';
+const feePayerPool = ENABLE_FEE_PAYER_POOL 
+  ? new FeePayerPool(connection, {
+      minBalance: 0.1 * LAMPORTS_PER_SOL,
+      autoFund: NETWORK === 'devnet',
+      rotationStrategy: (process.env.FEE_PAYER_ROTATION_STRATEGY as any) || 'round-robin'
+    })
+  : null;
+if (feePayerPool) {
+  feePayerPool.initializeFromEnv();
+  feePayerPool.startMonitoring(60000); // Monitor every minute
+  log.info('Fee payer pool enabled');
+}
+
+// NFT minting service (if enabled - optional, requires Metaplex)
+let nftMintingService: NFTMintingService | null = null;
+const ENABLE_NFT_RECEIPTS = process.env.ENABLE_NFT_RECEIPTS === 'true' || process.env.ENABLE_NFT_RECEIPTS === '1';
+if (ENABLE_NFT_RECEIPTS) {
+  try {
+    nftMintingService = new NFTMintingService(connection, feePayer);
+    log.info('NFT receipt minting enabled');
+  } catch (error) {
+    log.warn({ error }, 'NFT minting service not available (Metaplex may not be installed)');
+    nftMintingService = null;
+  }
+}
+
+// Analytics aggregator
+const analytics = new AnalyticsAggregator();
+
+// Reputation manager
+const reputationManager = new ReputationManager(connection, new PublicKey('11111111111111111111111111111111'));
+
+// Multi-chain bridge (if enabled)
+const BRIDGE_PROVIDER = process.env.BRIDGE_PROVIDER as 'wormhole' | 'layerzero' | undefined;
+const bridgeManager = BRIDGE_PROVIDER 
+  ? new BridgeManager(connection, BRIDGE_PROVIDER)
+  : null;
+if (bridgeManager) {
+  log.info({ provider: BRIDGE_PROVIDER, supportedChains: bridgeManager.getSupportedChains() }, 'Multi-chain bridge enabled');
+}
 
 // Auto-fund on devnet if balance is low (with retry logic and alternative methods)
 async function requestAirdropWithRetry(publicKey: PublicKey, amount: number, maxRetries = 5): Promise<string | null> {
@@ -128,7 +238,45 @@ type ExactSvmAuthorization = {
   nonce: string;
 };
 
-// Simple auth + rate limit (very light)
+// Advanced rate limiting with Redis and reputation
+const rateLimitMiddleware = new RateLimitMiddleware({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX_REQUESTS,
+  redisUrl: REDIS_URL || undefined,
+  enableReputation: ENABLE_REPUTATION,
+  enablePoW: ENABLE_POW,
+  powDifficulty: POW_DIFFICULTY,
+});
+
+// Oracle price validation
+const oracleValidator = new OraclePriceValidator({
+  provider: ORACLE_PROVIDER,
+  priceFeedId: ORACLE_PRICE_FEED_ID,
+  maxDeviationPercent: ORACLE_MAX_DEVIATION_PERCENT,
+  connection,
+});
+
+// Optimistic verification (if enabled)
+const ENABLE_OPTIMISTIC = process.env.ENABLE_OPTIMISTIC === 'true' || process.env.ENABLE_OPTIMISTIC === '1';
+const optimisticVerifier = ENABLE_OPTIMISTIC ? new OptimisticVerifier(connection) : null;
+if (optimisticVerifier) {
+  optimisticVerifier.startReconciliation(5000); // Reconcile every 5 seconds
+  log.info('Optimistic verification enabled');
+}
+
+// Batch settlement (if enabled)
+const ENABLE_BATCH_SETTLEMENT = process.env.ENABLE_BATCH_SETTLEMENT === 'true' || process.env.ENABLE_BATCH_SETTLEMENT === '1';
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '10', 10);
+const BATCH_INTERVAL_MS = parseInt(process.env.BATCH_INTERVAL_MS || '5000', 10);
+const batchSettlementManager = ENABLE_BATCH_SETTLEMENT 
+  ? new BatchSettlementManager(connection, feePayer, BATCH_SIZE, BATCH_INTERVAL_MS)
+  : null;
+if (batchSettlementManager) {
+  batchSettlementManager.start();
+  log.info({ batchSize: BATCH_SIZE, intervalMs: BATCH_INTERVAL_MS }, 'Batch settlement enabled');
+}
+
+// Simple auth + rate limit (very light) - fallback
 const lastReq: Record<string, number> = {};
 // Choose storage: Redis if REDIS_URL is provided and client is available, else file TTLStore
 function createStore(fileName: string) {
@@ -156,18 +304,56 @@ function createStore(fileName: string) {
 
 const nonceStore = createStore('nonces');
 const idempotencyStore = createStore('settlements');
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   if (AUTH_TOKEN) {
     const k = req.header('x-api-key') || '';
     if (k !== AUTH_TOKEN) return res.status(401).json({ error: 'unauthorized' });
   }
-  const ip = req.ip || 'unknown';
-  const now = Date.now();
+  
   if (!DISABLE_RATE_LIMIT) {
+    const ip = req.ip || 'unknown';
+    const powHeader = req.header('x-pow-header');
+    
+    // Try to extract wallet from payment header if available
+    let wallet: PublicKey | undefined;
+    try {
+      const paymentHeader = req.header('x-payment');
+      if (paymentHeader) {
+        const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8'));
+        const authFrom = decoded?.payload?.authorization?.from;
+        if (authFrom) {
+          wallet = new PublicKey(authFrom);
+        }
+      }
+    } catch {
+      // Ignore errors extracting wallet
+    }
+    
+    const rateLimitResult = await rateLimitMiddleware.check(ip, wallet, powHeader);
+    
+    if (!rateLimitResult.allowed) {
+      res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX_REQUESTS);
+      res.setHeader('X-RateLimit-Remaining', rateLimitResult.remaining);
+      res.setHeader('X-RateLimit-Reset', new Date(rateLimitResult.resetAt).toISOString());
+      return res.status(429).json({ 
+        error: 'rate_limited', 
+        reason: rateLimitResult.reason,
+        resetAt: rateLimitResult.resetAt 
+      });
+    }
+    
+    res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX_REQUESTS);
+    res.setHeader('X-RateLimit-Remaining', rateLimitResult.remaining);
+    res.setHeader('X-RateLimit-Reset', new Date(rateLimitResult.resetAt).toISOString());
+  } else {
+    // Fallback to simple rate limiting
+    const ip = req.ip || 'unknown';
+    const now = Date.now();
     const minInterval = Math.max(0, RATE_LIMIT_MIN_INTERVAL_MS);
     if (lastReq[ip] && now - lastReq[ip] < minInterval) return res.status(429).json({ error: 'rate_limited' });
+    lastReq[ip] = now;
   }
-  lastReq[ip] = now;
+  
   next();
 });
 
@@ -178,6 +364,28 @@ app.post('/verify', async (req: express.Request, res: express.Response) => {
     return res.status(400).json({ isValid: false, invalidReason: 'bad_request' });
   }
   const { paymentHeader, paymentRequirements } = parse.data;
+  
+  // Try optimistic verification first (if enabled)
+  if (optimisticVerifier) {
+    const optimisticResult = await optimisticVerifier.verifyOptimistic(paymentHeader, paymentRequirements);
+    if (optimisticResult.isValid) {
+      // Return immediately - background worker will confirm
+      return res.json({ 
+        isValid: true, 
+        invalidReason: null,
+        optimistic: true,
+        confirmed: optimisticResult.confirmed
+      });
+    } else if (optimisticResult.invalidReason) {
+      // Optimistic verification failed - return error immediately
+      return res.status(200).json({ 
+        isValid: false, 
+        invalidReason: optimisticResult.invalidReason 
+      });
+    }
+    // Fall through to standard verification if optimistic check is inconclusive
+  }
+  
   try {
     const decoded = JSON.parse(Buffer.from(paymentHeader, 'base64').toString('utf8')) as any;
     // Optional fast-path: if a transaction is present, try strict native verification without helper
@@ -275,6 +483,26 @@ app.post('/verify', async (req: express.Request, res: express.Response) => {
     if (auth.to !== paymentRequirements.payTo) return res.status(200).json({ isValid: false, invalidReason: 'invalid_exact_svm_payload_recipient_mismatch' });
     if (auth.value !== paymentRequirements.maxAmountRequired) return res.status(200).json({ isValid: false, invalidReason: 'invalid_exact_svm_payload_authorization_value' });
     
+    // Oracle price validation (if enabled)
+    if (oracleValidator.isEnabled()) {
+      try {
+        const amountNumber = Number(paymentRequirements.maxAmountRequired);
+        const validationResult = await oracleValidator.validatePrice(amountNumber, paymentRequirements.asset);
+        if (!validationResult.valid) {
+          log.warn({
+            providedPrice: validationResult.providedPrice,
+            oraclePrice: validationResult.oraclePrice,
+            deviationPercent: validationResult.deviationPercent,
+            error: validationResult.error
+          }, 'Price validation failed');
+          return res.status(200).json({ isValid: false, invalidReason: 'price_validation_failed', details: validationResult.error });
+        }
+      } catch (error) {
+        log.error({ error }, 'Price validation error');
+        // Continue with verification even if price validation fails (fail open)
+      }
+    }
+    
     // NOTE: This implementation uses simplified authorization-based verification for demo purposes.
     // Production deployments should use USE_X402_HELPERS=true or implement full Solana transaction
     // deserialization and signature verification as per x402 specification.
@@ -290,7 +518,21 @@ app.post('/verify', async (req: express.Request, res: express.Response) => {
     }
     // Persistent replay protection (can be disabled in dev)
     if (!DISABLE_NONCE_REPLAY) {
-      if (await (nonceStore as any).has(auth.nonce)) return res.status(200).json({ isValid: false, invalidReason: 'nonce_replay' });
+      // Check off-chain store first (fast path)
+      if (await (nonceStore as any).has(auth.nonce)) {
+        return res.status(200).json({ isValid: false, invalidReason: 'nonce_replay' });
+      }
+      
+      // Check on-chain nonce registry (slower but authoritative)
+      const payerPk = new PublicKey(auth.from);
+      const providerPk = new PublicKey(paymentRequirements.payTo);
+      const onChainCheck = await checkNonceOnChain(connection, payerPk, providerPk, auth.nonce);
+      
+      if (onChainCheck.used) {
+        return res.status(200).json({ isValid: false, invalidReason: 'nonce_replay' });
+      }
+      
+      // Store in off-chain cache for fast subsequent checks
       await (nonceStore as any).set(auth.nonce, NONCE_TTL_MS);
     }
     return res.json({ isValid: true, invalidReason: null });
@@ -324,6 +566,35 @@ app.post('/settle', async (req: express.Request, res: express.Response) => {
     const auth = decoded?.payload?.authorization as ExactSvmAuthorization | undefined;
     const payerAddress = auth ? new PublicKey(auth.from) : null;
     
+    // Check if batch settlement is enabled and queue payment
+    if (batchSettlementManager && payerAddress) {
+      const queuedPayment: QueuedPayment = {
+        id: idemKey,
+        paymentHeader: parse.data.paymentHeader,
+        paymentRequirements: parse.data.paymentRequirements,
+        timestamp: Date.now(),
+        provider: payTo,
+        payer: payerAddress,
+        amount: BigInt(parse.data.paymentRequirements.maxAmountRequired),
+        asset: new PublicKey(parse.data.paymentRequirements.asset),
+        settlementMode: SETTLEMENT_MODE
+      };
+      
+      batchSettlementManager.queuePayment(queuedPayment);
+      
+      // Return immediately - payment will be settled in batch
+      idempotencyStore.set(idemKey, 10 * 60 * 1000);
+      return res.json({ 
+        success: true, 
+        error: null, 
+        txHash: 'queued_for_batch', 
+        networkId: NETWORK, 
+        payer: payerAddress.toBase58(),
+        batchSettlement: true,
+        queueSize: batchSettlementManager.getQueueSize(payTo)
+      });
+    }
+    
     // Check if payload contains a transaction (proper x402 flow) or just authorization (demo mode)
     const hasTransaction = decoded?.payload?.transaction;
     
@@ -341,6 +612,24 @@ app.post('/settle', async (req: express.Request, res: express.Response) => {
           );
           if (result.success) {
             idempotencyStore.set(idemKey, 10 * 60 * 1000);
+            
+            // Record analytics and reputation
+            if (payerAddress) {
+              const startTime = Date.now();
+              analytics.recordPayment(
+                payerAddress.toBase58(),
+                BigInt(parse.data.paymentRequirements.maxAmountRequired),
+                parse.data.paymentRequirements.asset,
+                parse.data.paymentRequirements.resource,
+                Date.now() - startTime
+              );
+              
+              // Update provider reputation
+              reputationManager.recordSettlement(payTo, true).catch(err => {
+                log.warn({ error: err }, 'Failed to update reputation');
+              });
+            }
+            
             return res.json({ success: true, error: null, txHash: result.transaction, networkId: NETWORK, payer: payerAddress?.toBase58() ?? null });
           } else {
             return res.status(500).json({ success: false, error: result.errorReason ?? 'settlement_failed', txHash: null, networkId: NETWORK });
@@ -497,10 +786,73 @@ app.post('/settle', async (req: express.Request, res: express.Response) => {
       const { blockhash } = await connection.getLatestBlockhash('confirmed');
       tx.recentBlockhash = blockhash;
       
-      sig = await sendAndConfirmTransaction(connection, tx, [feePayer], { commitment: 'confirmed' });
+      // Use optimistic mode if enabled (don't wait for confirmation)
+      if (optimisticVerifier) {
+        // Send transaction without waiting for confirmation
+        sig = await connection.sendTransaction(tx, [feePayer], { skipPreflight: false });
+        // Add to pending verifications for reconciliation
+        optimisticVerifier.addPending(sig, parse.data.paymentHeader, parse.data.paymentRequirements);
+      } else {
+        sig = await sendAndConfirmTransaction(connection, tx, [feePayer], { commitment: 'confirmed' });
+      }
     }
     idempotencyStore.set(idemKey, 10 * 60 * 1000);
-    return res.json({ success: true, error: null, txHash: sig, networkId: NETWORK, payer: decoded?.payload?.authorization?.from ?? null });
+    
+    // Register nonce on-chain after successful settlement (async, don't wait)
+    if (auth && !DISABLE_NONCE_REPLAY) {
+      const payerPk = new PublicKey(auth.from);
+      const providerPk = new PublicKey(parse.data.paymentRequirements.payTo);
+      registerNonceOnChain(connection, feePayer, payerPk, providerPk, auth.nonce).catch(err => {
+        log.warn({ error: err instanceof Error ? err.message : String(err) }, 'Failed to register nonce on-chain');
+      });
+    }
+    
+    // Mint NFT receipt if enabled (async, don't wait)
+    let nftMint: string | null = null;
+    if (nftMintingService && auth && payerAddress) {
+      nftMintingService.mintReceiptNFT(payerAddress, {
+        endpoint: parse.data.paymentRequirements.resource,
+        timestamp: Date.now(),
+        txHash: sig,
+        payer: auth.from,
+        provider: parse.data.paymentRequirements.payTo,
+        amount: parse.data.paymentRequirements.maxAmountRequired,
+        asset: parse.data.paymentRequirements.asset
+      }).then(result => {
+        if (result) {
+          nftMint = result.mint.toBase58();
+          log.info({ nftMint, payer: payerAddress.toBase58(), txHash: sig }, 'NFT receipt minted');
+        }
+      }).catch(err => {
+        log.warn({ error: err instanceof Error ? err.message : String(err) }, 'Failed to mint NFT receipt');
+      });
+    }
+    
+    // Record analytics and reputation
+    if (payerAddress) {
+      const startTime = Date.now();
+      analytics.recordPayment(
+        payerAddress.toBase58(),
+        BigInt(parse.data.paymentRequirements.maxAmountRequired),
+        parse.data.paymentRequirements.asset,
+        parse.data.paymentRequirements.resource,
+        Date.now() - startTime
+      );
+      
+      // Update provider reputation
+      reputationManager.recordSettlement(payTo, true).catch(err => {
+        log.warn({ error: err }, 'Failed to update reputation');
+      });
+    }
+    
+    return res.json({ 
+      success: true, 
+      error: null, 
+      txHash: sig, 
+      networkId: NETWORK, 
+      payer: decoded?.payload?.authorization?.from ?? null,
+      nftMint: nftMint || undefined
+    });
   } catch (e) {
     // Extract detailed error information
     let errorMessage = 'unknown_error';
@@ -540,14 +892,56 @@ app.post('/settle', async (req: express.Request, res: express.Response) => {
 app.get('/health', async (_req: express.Request, res: express.Response) => {
   try {
     const version = await connection.getVersion();
-    res.json({ ok: true, rpc: version['solana-core'] ?? null, feePayer: feePayer.publicKey.toBase58(), network: NETWORK, settlementMode: SETTLEMENT_MODE });
+    const startTime = process.uptime();
+    
+    // Check Redis connection if available
+    let redisHealthy = false;
+    if (REDIS_URL) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const Redis = require('ioredis');
+        const redis = new Redis(REDIS_URL);
+        await redis.ping();
+        redisHealthy = true;
+        redis.disconnect();
+      } catch {
+        redisHealthy = false;
+      }
+    }
+    
+    res.json({ 
+      healthy: true,
+      timestamp: Date.now(),
+      services: {
+        rpc: true,
+        redis: REDIS_URL ? redisHealthy : undefined
+      },
+      metrics: {
+        uptime: startTime,
+        requestCount: 0, // TODO: Track request count
+        errorRate: 0 // TODO: Track error rate
+      },
+      rpc: version['solana-core'] ?? null, 
+      feePayer: feePayer.publicKey.toBase58(), 
+      network: NETWORK, 
+      settlementMode: SETTLEMENT_MODE,
+      features: {
+        optimisticVerification: ENABLE_OPTIMISTIC,
+        batchSettlement: ENABLE_BATCH_SETTLEMENT,
+        feePayerPool: ENABLE_FEE_PAYER_POOL
+      }
+    });
   } catch {
-    res.json({ ok: false });
+    res.json({ healthy: false, timestamp: Date.now() });
   }
 });
 
 app.get('/supported', (_req: express.Request, res: express.Response) => {
   res.json({ kinds: [{ scheme: 'exact', network: 'solana-devnet' }] });
+});
+
+app.get('/analytics', (_req: express.Request, res: express.Response) => {
+  res.json(analytics.getMetrics());
 });
 
 app.listen(PORT, () => {
