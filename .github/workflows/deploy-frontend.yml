@@ -15,7 +15,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
@@ -24,7 +24,12 @@ jobs:
 
       - name: Run linting
         working-directory: clients/web
-        run: npm run lint || true
+        run: |
+          if [ -f .eslintrc.json ] || [ -f .eslintrc.js ] || [ -f eslint.config.js ]; then
+            npm run lint || true
+          else
+            echo "ESLint not configured, skipping lint step"
+          fi
 
       - name: Build frontend
         working-directory: clients/web
