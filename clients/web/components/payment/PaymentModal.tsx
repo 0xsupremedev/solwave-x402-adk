@@ -6,6 +6,7 @@ import type { PaymentRequirements } from '../../types/x402';
 import { createPaymentHeader, executePayment } from '../../lib/payments';
 import { formatPaymentAmount } from '../../lib/solana';
 import { getSolscanUrl } from '../../lib/wallet';
+import { TransactionStatus } from './TransactionStatus';
 import toast from 'react-hot-toast';
 
 interface PaymentModalProps {
@@ -17,9 +18,11 @@ interface PaymentModalProps {
 
 export function PaymentModal({ isOpen, onClose, resourceUrl, requirements }: PaymentModalProps) {
   const { publicKey } = useWallet();
-  const [status, setStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'pending' | 'verifying' | 'success' | 'error'>('idle');
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [optimistic, setOptimistic] = useState(false);
+  const [batchSettlement, setBatchSettlement] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -53,10 +56,30 @@ export function PaymentModal({ isOpen, onClose, resourceUrl, requirements }: Pay
       // Execute payment
       const result = await executePayment(resourceUrl, paymentHeader);
 
-      if (result.success && result.settlement?.txHash) {
-        setTxHash(result.settlement.txHash);
-        setStatus('success');
-        toast.success('Payment successful!');
+      if (result.success) {
+        const settlement = result.settlement;
+        
+        // Check for optimistic verification
+        if (settlement?.optimistic) {
+          setOptimistic(true);
+          setStatus('verifying');
+          toast.success('Payment verified optimistically! Confirming on-chain...');
+        } else {
+          setStatus('verifying');
+        }
+
+        // Check for batch settlement
+                if (settlement?.batchSettlement) {
+                  setBatchSettlement(true);
+                  toast('Payment queued for batch settlement', { icon: 'ℹ️' });
+                }
+
+        if (settlement?.txHash) {
+          setTxHash(settlement.txHash);
+        } else if (settlement?.txHash === 'queued_for_batch') {
+          setTxHash(null);
+          setBatchSettlement(true);
+        }
       } else {
         setError(result.error || 'Payment failed');
         setStatus('error');
@@ -122,25 +145,42 @@ export function PaymentModal({ isOpen, onClose, resourceUrl, requirements }: Pay
             </div>
           )}
 
-          {status === 'success' && txHash && (
+          {(status === 'verifying' || status === 'success') && (
             <div className="space-y-3">
-              <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4">
-                <p className="text-green-400 font-semibold mb-2">✓ Payment Successful!</p>
-                <a
-                  href={getSolscanUrl(txHash, requirements.network)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-brand hover:underline text-sm"
+              {optimistic && (
+                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                  <p className="text-blue-400 text-sm font-medium">⚡ Optimistic Verification</p>
+                  <p className="text-blue-300 text-xs mt-1">Payment verified quickly, confirming on-chain...</p>
+                </div>
+              )}
+              {batchSettlement && (
+                <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-3">
+                  <p className="text-purple-400 text-sm font-medium">📦 Batch Settlement</p>
+                  <p className="text-purple-300 text-xs mt-1">Payment queued for efficient batch processing</p>
+                </div>
+              )}
+              {txHash && (
+                <TransactionStatus
+                  signature={txHash}
+                  network={requirements.network}
+                  onConfirmed={() => {
+                    setStatus('success');
+                    toast.success('Transaction confirmed on-chain!');
+                  }}
+                  onFailed={() => {
+                    setStatus('error');
+                    setError('Transaction failed to confirm');
+                  }}
+                />
+              )}
+              {status === 'success' && (
+                <button
+                  onClick={onClose}
+                  className="w-full px-4 py-3 rounded-lg bg-brand hover:bg-brand/90 text-white font-medium transition-colors"
                 >
-                  View Transaction on Solscan →
-                </a>
-              </div>
-              <button
-                onClick={onClose}
-                className="w-full px-4 py-3 rounded-lg bg-brand hover:bg-brand/90 text-white font-medium transition-colors"
-              >
-                Close
-              </button>
+                  Close
+                </button>
+              )}
             </div>
           )}
 
