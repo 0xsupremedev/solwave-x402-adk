@@ -1,0 +1,194 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  password      String?
+  image         String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // OAuth providers
+  accounts      Account[]
+  sessions      Session[]
+  
+  // User data
+  wallets       Wallet[]
+  telegramId    String?   @unique
+  merchant      Merchant?
+  apiKeys       ApiKey[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  userId    String
+  address   String
+  network   String   @default("solana")
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, address])
+}
+
+model Merchant {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  name              String
+  receivingAddress  String
+  webhookUrl        String?
+  x402Config        String? // JSON config
+  supportedToken    String   @default("USDC")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices  Invoice[]
+}
+
+model Invoice {
+  id            String      @id @default(cuid())
+  merchantId    String
+  amount        String      // Store as string to handle decimals
+  token         String      @default("USDC")
+  status        InvoiceStatus @default(PENDING)
+  txSignature   String?
+  expiresAt     DateTime
+  metadata      String?     // JSON metadata
+  nonce         String      @unique
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  EXPIRED
+  CANCELLED
+  SETTLED
+}
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  userId      String
+  key         String   @unique
+  name        String
+  scopes      String   // JSON array of scopes
+  rateLimit   Int      @default(1000)
+  lastUsedAt  DateTime?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AgentSession {
+  id          String   @id @default(cuid())
+  agentId     String
+  traceEvents String?  // JSON array of trace events
+  artifacts   String?  // JSON array of artifacts
+  state       String?  // JSON state
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([agentId])
+  @@index([createdAt])
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  merchantId String
+  url       String
+  secret    String
+  events    String   // JSON array of event types
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([merchantId])
+}
+
+model WalletNonce {
+  id               String   @id @default(cuid())
+  pubkey           String
+  nonceHash        String   @unique
+  ipHash           String?
+  fingerprintHash  String?
+  expiresAt        DateTime
+  consumedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([pubkey])
+  @@index([expiresAt])
+}
+
+model SolwaveSession {
+  id             String   @id @default(cuid())
+  sessionId      String   @unique
+  pubkey         String
+  userAgentHash  String?
+  lastIp         String?
+  nonceId        String?
+  revokedAt      DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([pubkey])
+  @@index([expiresAt])
+}
