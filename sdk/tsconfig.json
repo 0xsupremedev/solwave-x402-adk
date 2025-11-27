@@ -1,0 +1,19 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "module": "commonjs",
+    "target": "ES2019",
+    "moduleResolution": "node",
+    "allowJs": false,
+    "jsx": "preserve"
+  },
+  "include": ["src/index.ts", "src/types"],
+  "exclude": ["dist", "node_modules", "src/__tests__"]
+}
+
+

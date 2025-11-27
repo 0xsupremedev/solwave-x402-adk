@@ -62,3 +62,12 @@ Thumbs.db
 *.zip
 *.tar.gz
 archive.zip
+
+.vercel
+
+# sdk package artifacts
+sdk/dist/
+sdk/node_modules/
+sdk/*.tgz
+sdk/package-lock.json
+
