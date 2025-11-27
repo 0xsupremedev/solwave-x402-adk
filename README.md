@@ -79,6 +79,21 @@ https://github.com/user-attachments/assets/8d989fc8-9237-40e4-a378-98b960a7b60a
 
 ---
 
+## 📦 npm SDK
+
+The TypeScript SDK that powers agent-to-agent payments is published as [`@0xsupremedev/x402-sdk`](https://www.npmjs.com/package/@0xsupremedev/x402-sdk). Use it to invoice agents, build Solana transactions, tap Phantom/Solflare wallets, and integrate x402 flows inside your own apps.
+
+```bash
+npm install @0xsupremedev/x402-sdk @solana/web3.js
+# or
+pnpm add @0xsupremedev/x402-sdk @solana/web3.js
+```
+
+- Full TypeScript typings with Node + browser parity
+- Wallet-agnostic signer abstraction plus auto-detection helpers
+- Invoice helpers (`createInvoice`, `watchInvoice`) with retry/backoff + structured `X402Error` hooks
+- Example scripts: devnet Node flow + browser wallet demo in `sdk/examples/`
+
 ## 🛠️ Tech Stack
 
 ### Frontend
@@ -496,15 +511,15 @@ Content-Type: application/json
 ### Installation
 
 ```bash
-npm install @solwave/sdk
+npm install @0xsupremedev/x402-sdk @solana/web3.js
 # or
-pnpm add @solwave/sdk
+pnpm add @0xsupremedev/x402-sdk @solana/web3.js
 ```
 
 ### Basic Usage
 
 ```typescript
-import { createSDK } from '@solwave/sdk';
+import { createSDK } from '@0xsupremedev/x402-sdk';
 
 const sdk = createSDK({
   apiUrl: 'http://localhost:3000',
@@ -532,7 +547,7 @@ unwatch();
 #### Client Agent
 
 ```typescript
-import { ADKClient } from '@solwave/sdk';
+import { ADKClient } from '@0xsupremedev/x402-sdk';
 
 const client = new ADKClient();
 const buyerAgent = client.createClientAgent('buyer-agent-1', 'user-123');
