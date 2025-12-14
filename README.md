@@ -1,6 +1,11 @@
-# 🚀 MicroAPI Hub
+
 
 **Complete x402 (Solana) payment protocol implementation for API monetization**
+
+
+https://github.com/user-attachments/assets/7973183b-c5b5-4ed4-9955-e72599414630
+
+
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue)](https://www.typescriptlang.org/)
