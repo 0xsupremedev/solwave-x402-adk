@@ -13,8 +13,7 @@ https://github.com/user-attachments/assets/7973183b-c5b5-4ed4-9955-e72599414630
 [![Next.js](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green)](https://nodejs.org/)
 
-<img width="1557" height="1079" alt="image" src="https://github.com/user-attachments/assets/f092b525-0732-4fcc-afd8-b739a26c4d6c" />
-<img width="1592" height="1077" alt="image" src="https://github.com/user-attachments/assets/82ac7572-d48a-4b01-9015-8cfd696f2986" />
+
 
 
 <div align="center">
